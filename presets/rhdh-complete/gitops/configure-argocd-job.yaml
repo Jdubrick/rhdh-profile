@@ -1,0 +1,200 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: configure-argocd-job
+  namespace: rhdh
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: configure-argocd-job-role
+  namespace: rhdh
+rules:
+- apiGroups: [""]
+  resources: ["secrets", "pods"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+- apiGroups: ["argoproj.io"]
+  resources: ["argocds"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: configure-argocd-job-binding
+  namespace: rhdh
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: configure-argocd-job-role
+subjects:
+- kind: ServiceAccount
+  name: configure-argocd-job
+  namespace: rhdh
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: configure-argocd
+  namespace: rhdh
+spec:
+  template:
+    spec:
+      serviceAccountName: configure-argocd-job
+      restartPolicy: OnFailure
+      containers:
+        - name: configure-gitops
+          image: "registry.redhat.io/openshift4/ose-tools-rhel9:v4.18.0-202502260503.p0.geb9bc9b.assembly.stream.el9"
+          workingDir: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -o nounset
+              set -o pipefail
+
+              echo "* Installing ArgoCD CLI *"
+              curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+              chmod 555 argocd
+              echo -n "ArgoCD CLI version: "
+              ./argocd version --client | head -1 | cut -d' ' -f2
+
+              CRD="argocds"
+              echo "* Waiting for '$CRD' CRD *"
+              while [ $(kubectl api-resources | grep -c "^$CRD ") = "0" ] ; do
+                echo -n "." && sleep 3
+              done
+              echo "OK"
+
+              #
+              # All actions must be idempotent
+              #
+              CHART="rhdh"
+              NAMESPACE="rhdh"
+              RHDH_ARGOCD_INSTANCE="$CHART-argocd"
+
+              echo "* Waiting for Gitops Operator Deployment *"
+              while true; do
+                kubectl wait --for=jsonpath='{.status.phase}'=Available argocds.argoproj.io -n openshift-gitops openshift-gitops > /dev/null 2>&1
+                if [ $? -ne 0 ]; then
+                  echo -n "." && sleep 3
+                else
+                  echo "OK"
+                  break
+                fi
+              done
+
+              echo "* Creating ArgoCD Instance *"
+              cat <<EOF | kubectl apply -n "$NAMESPACE" -f - >/dev/null
+              apiVersion: argoproj.io/v1beta1
+              kind: ArgoCD
+              metadata:
+                name: ai-rhdh-argocd
+              spec:
+                server:
+                  route:
+                    enabled: true
+                    tls:
+                      insecureEdgeTerminationPolicy: Redirect
+                      termination: reencrypt
+                sso:
+                  dex:
+                    openShiftOAuth: true
+                    resources:
+                      limits:
+                        cpu: 500m
+                        memory: 256Mi
+                      requests:
+                        cpu: 250m
+                        memory: 128Mi
+                  provider: dex
+                rbac:
+                  defaultPolicy: ''
+                  policy: |
+                    g, system:cluster-admins, role:admin
+                    g, cluster-admins, role:admin
+                  scopes: '[groups]'
+                controller:
+                  processors: {}
+                  resources:
+                    limits:
+                      cpu: "2"
+                      memory: 6Gi
+                    requests:
+                      cpu: "1"
+                      memory: 3Gi
+                extraConfig:
+                  accounts.admin: apiKey, login
+              EOF
+              echo "... Waiting for ArgoCD Instance"
+              while true; do
+                kubectl wait --for=jsonpath='{.status.phase}'=Available argocds.argoproj.io -n "$NAMESPACE" "ai-$RHDH_ARGOCD_INSTANCE" > /dev/null 2>&1
+                if [ $? -ne 0 ]; then
+                  echo -n "." && sleep 3
+                else
+                  echo "OK"
+                  break
+                fi
+              done
+              echo "... Fetching ArgoCD Instance Route"
+              until kubectl get route -n "$NAMESPACE" "ai-$RHDH_ARGOCD_INSTANCE-server" >/dev/null 2>&1; do
+                echo -n "." && sleep 3
+              done
+              echo "OK"
+
+              echo "* Updating ArgoCD Admin User *"
+              if [ "$(kubectl get secret "$RHDH_ARGOCD_INSTANCE-secret" -o name --ignore-not-found | wc -l)" = "0" ]; then
+                  echo "... Fetching ArgoCD Hostname"
+                  ARGOCD_HOSTNAME="$(kubectl get route -n "$NAMESPACE" "ai-$RHDH_ARGOCD_INSTANCE-server" --ignore-not-found -o jsonpath={.spec.host})"
+                  echo "OK"
+                  echo "... Fetching ArgoCD Password"
+                  ARGOCD_PASSWORD="$(kubectl get secret -n "$NAMESPACE" "ai-$RHDH_ARGOCD_INSTANCE-cluster" -o jsonpath="{.data.admin\.password}" | base64 --decode)"
+                  echo "OK"
+                  
+                  RETRY=0
+                  MAX_RETRY=20
+                  deadline_exceeded_tries=0
+                  max_deadline_exceeded_tries=5
+                  deadline_exceeded_thrown=0
+
+                  echo "* Logging Into ArgoCD *"
+                  while (( RETRY < MAX_RETRY )); do
+                    attempt_result=$(./argocd login "$ARGOCD_HOSTNAME" --grpc-web --insecure --http-retry-max 10 --username admin --password "$ARGOCD_PASSWORD" --skip-test-tls 2>&1)
+                    exit_code=$?
+
+                    if [[ $exit_code -eq 0 ]]; then
+                      echo "Successfully logged in to ArgoCD."
+                      break
+                    fi
+
+                    RETRY=$((RETRY + 1))
+                    echo -n "." && sleep 5
+                  done
+
+                  if [[ "$RETRY" -eq "$MAX_RETRY" ]]; then
+                    echo "FAIL"
+                    echo "[ERROR] Could not login to  ArgoCD, retry limit reached." >&2
+                    exit 1
+                  fi
+
+                  echo -n "."
+                  ARGOCD_API_TOKEN="$(./argocd account generate-token --http-retry-max 5 --account "admin")"
+                  echo -n "."
+                  kubectl create secret generic "$RHDH_ARGOCD_INSTANCE-secret" \
+                    --from-literal="ARGOCD_API_TOKEN=$ARGOCD_API_TOKEN" \
+                    --from-literal="ARGOCD_HOSTNAME=$ARGOCD_HOSTNAME" \
+                    --from-literal="ARGOCD_PASSWORD=$ARGOCD_PASSWORD" \
+                    --from-literal="ARGOCD_USER=admin" \
+                    -n "$NAMESPACE" \
+                    > /dev/null
+              fi
+              echo "OK"
+  backoffLimit: 4
