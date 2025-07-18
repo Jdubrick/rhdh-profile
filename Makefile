@@ -6,9 +6,7 @@ deploy-operator:
 
 .PHONY: delete-operator
 delete-operator:
-	oc delete -k ./presets/rhdh-complete
-	oc delete -k ./profile/namespace
-	oc delete -k ./profile/default-config
+	oc delete -k ./profile
 
 .PHONY: deploy-rhdh
 deploy-rhdh:
