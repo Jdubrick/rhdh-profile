@@ -1,0 +1,40 @@
+apiVersion: rhdh.redhat.com/v1alpha3
+kind: Backstage
+metadata:
+  name: rhdh-complete
+spec:
+  application:
+    dynamicPluginsConfigMapName: my-custom-plugins
+  deployment:
+    patch:
+      spec:
+        template:
+          spec:
+            containers:
+              - env:
+                  - name: RCS_CONFIG_FILE
+                    value: /app-root/config/rcsconfig.yaml
+                  - name: RHDH_CONFIG_FILE
+                    value: /app-root/config/default.app-config.yaml
+                  - name: PROJECT
+                    value: rhdh
+                envFrom:
+                  - secretRef:
+                      name: rhdh-secrets
+                image: quay.io/redhat-ai-dev/road-core-service:latest
+                name: road-core-sidecar
+                volumeMounts:
+                  - mountPath: /app-root/config/rcsconfig.yaml
+                    name: rcsconfig
+                    subPath: rcsconfig.yaml
+                  - mountPath: /app-root/config/default.app-config.yaml
+                    name: backstage-appconfig-rhdh-complete
+                    subPath: default.app-config.yaml
+                  - mountPath: /app-root/tmp/data/feedback
+                    name: shared-data
+            volumes:
+              - name: rcsconfig
+                configMap:
+                  name: rcsconfig
+              - name: shared-data
+                emptyDir: {}

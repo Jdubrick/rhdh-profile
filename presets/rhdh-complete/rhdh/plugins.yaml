@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-custom-plugins
+data:
+  dynamic-plugins.yaml: |
+    includes:
+      - dynamic-plugins.default.yaml
+    plugins:
+      - disabled: false
+        package: ./dynamic-plugins/dist/backstage-plugin-techdocs-backend-dynamic
+      - disabled: false
+        package: ./dynamic-plugins/dist/backstage-plugin-techdocs
+      - disabled: false
+        package: ./dynamic-plugins/dist/backstage-community-plugin-topology
+      - disabled: false
+        package: ./dynamic-plugins/dist/backstage-plugin-catalog-backend-module-github-dynamic
+      - disabled: false
+        package: ./dynamic-plugins/dist/backstage-plugin-catalog-backend-module-github-org-dynamic    
+      - disabled: false
+        package: ./dynamic-plugins/dist/backstage-plugin-scaffolder-backend-module-github-dynamic
+      - package: oci://quay.io/karthik_jk/lightspeed:latest!red-hat-developer-hub-backstage-plugin-lightspeed
+        disabled: false
+        pluginConfig:
+          dynamicPlugins:
+            frontend:
+              red-hat-developer-hub.backstage-plugin-lightspeed:
+                appIcons:
+                  - name: LightspeedIcon
+                    module: LightspeedPlugin
+                    importName: LightspeedIcon
+                dynamicRoutes:
+                  - path: /lightspeed
+                    importName: LightspeedPage
+                    module: LightspeedPlugin
+                    menuItem:
+                      icon: LightspeedIcon
+                      text: Lightspeed
+      - package: oci://quay.io/karthik_jk/lightspeed:latest!red-hat-developer-hub-backstage-plugin-lightspeed-backend
+        disabled: false
