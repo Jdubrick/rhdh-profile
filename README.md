@@ -89,3 +89,5 @@ The repository includes both traditional kubectl/kustomize commands and new CLI-
 | ------- | ----------- |
 | **make deploy-operator-cli** | Deploy the RHDH Operator |
 | **make deploy-presets-cli** | Deploy the RHDHPAI Preset for RHDH |
+| **make build** | Make the Go binary |
+| **make deps** | Tidy and verify go mod |
