@@ -1,1 +1,10 @@
+rhdh-cli
+
+*.env
+!example.env
+
+*.tmp
+/tmp/
+
 *-secrets.yaml
+!example-secrets.yaml

@@ -1,37 +1,17 @@
-NAMESPACE=rhdh
+BINARY_NAME=rhdh-cli
 
-.PHONY: deploy-operator
-deploy-operator:
-	oc apply -k ./profile
+.PHONY: build
+build:
+	go build -o $(BINARY_NAME) .
 
-.PHONY: delete-operator
-delete-operator:
-	oc delete -k ./profile
+.PHONY: deps
+deps:
+	go mod tidy
+	go mod verify
+.PHONY: deploy-operator-cli
+deploy-operator-cli: build
+	./$(BINARY_NAME) deploy operator --verbose
 
-.PHONY: deploy-rhdh
-deploy-rhdh:
-	oc apply -n $(NAMESPACE) -k ./presets/rhdh-complete
-
-.PHONY: delete-rhdh
-delete-rhdh:
-	oc delete -n $(NAMESPACE) -k ./presets/rhdh-complete
-
-.PHONY: deploy-all
-deploy-all:
-	$(MAKE) deploy-operator
-	@echo "Waiting for operator to be ready ..."
-	sleep 10
-	$(MAKE) deploy-rhdh
-
-.PHONY: delete-all
-delete-all:
-	delete-operator
-	delete-rhdh
-
-.PHONY: create-namespace
-create-namespace:
-	oc create namespace $(NAMESPACE)
-
-.PHONY: delete-namespace
-delete-namespace:
-	oc delete namespace $(NAMESPACE)
+.PHONY: deploy-presets-cli
+deploy-presets-cli: build
+	./$(BINARY_NAME) deploy presets --verbose
